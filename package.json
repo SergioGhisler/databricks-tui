@@ -1,0 +1,10 @@
+{
+  "name": "databricks-tui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"TODO: wire OpenTUI app\"",
+    "build": "echo \"TODO\""
+  }
+}
