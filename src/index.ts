@@ -1,7 +1,7 @@
 import { createCliRenderer, TextRenderable } from "@opentui/core"
 import readline from "node:readline/promises"
 import { stdin as input, stdout as output } from "node:process"
-import { addProfile, getActiveProfile, loadState, removeProfile, setActive, type WorkspaceProfile } from "./profiles"
+import { addProfile, getActiveProfile, loadState, removeProfile, setActive } from "./profiles"
 import { listCatalogs } from "./dbx"
 
 async function promptLogin() {
@@ -19,7 +19,7 @@ async function promptLogin() {
 
     await addProfile({ name, host, token, warehouseId: warehouseId || undefined })
     await setActive(name)
-    console.log(`Saved workspace '${name}'`) // clickable not needed in terminal
+    console.log(`Saved workspace '${name}'`)
   } finally {
     rl.close()
   }
@@ -66,21 +66,38 @@ async function cliMode(args: string[]) {
   return false
 }
 
+function drawPanel(title: string, bodyLines: string[], width = 58): string[] {
+  const top = `┌─ ${title} ${"─".repeat(Math.max(1, width - title.length - 4))}┐`
+  const bottom = `└${"─".repeat(width)}┘`
+  const rows = bodyLines.map((l) => `│ ${l.slice(0, width - 1).padEnd(width - 1, " ")}│`)
+  return [top, ...rows, bottom]
+}
+
+function combineColumns(left: string[], right: string[], gap = "  "): string[] {
+  const max = Math.max(left.length, right.length)
+  const lw = Math.max(...left.map((x) => x.length), 0)
+  const out: string[] = []
+  for (let i = 0; i < max; i++) {
+    const l = left[i] ?? ""
+    const r = right[i] ?? ""
+    out.push(l.padEnd(lw, " ") + gap + r)
+  }
+  return out
+}
+
 async function runTui() {
   const renderer = await createCliRenderer({ exitOnCtrlC: true })
   const state = await loadState()
-  const active = getActiveProfile(state)
 
   let selected = 0
-  const workspaces = state.profiles
-  const activeName = active?.name
-  if (activeName) {
-    const idx = workspaces.findIndex((w) => w.name === activeName)
+  const active = getActiveProfile(state)
+  if (active?.name) {
+    const idx = state.profiles.findIndex((w) => w.name === active.name)
     if (idx >= 0) selected = idx
   }
 
   let catalogs: string[] = []
-  let status = ""
+  let status = "ready"
 
   const screen = new TextRenderable(renderer, {
     id: "screen",
@@ -90,8 +107,12 @@ async function runTui() {
   })
   renderer.root.add(screen)
 
+  function currentWorkspaces() {
+    return state.profiles
+  }
+
   async function refreshCatalogs() {
-    const ws = workspaces[selected]
+    const ws = currentWorkspaces()[selected]
     if (!ws) {
       catalogs = []
       status = "No workspaces. Run: databricks-tui login"
@@ -109,39 +130,43 @@ async function runTui() {
   }
 
   function redraw() {
-    const lines: string[] = []
-    lines.push("databricks-tui")
-    lines.push("")
-    lines.push("Workspace manager: ↑/↓ move   Enter select/use   x delete   r refresh catalogs   q quit")
-    lines.push("CLI: databricks-tui login | databricks-tui use <name> | databricks-tui delete <name>")
-    lines.push("")
-    lines.push("Workspaces")
+    const header = [
+      "databricks-tui  (OpenTUI in progress)",
+      "keys: ↑/↓ move  Enter use  x delete  r refresh  q quit",
+      "commands: databricks-tui login | use <name> | delete <name>",
+      "",
+    ]
 
+    const wsLines: string[] = []
+    const workspaces = currentWorkspaces()
     if (workspaces.length === 0) {
-      lines.push("  (none)")
+      wsLines.push("(none)")
     } else {
       workspaces.forEach((w, i) => {
         const cursor = i === selected ? ">" : " "
         const activeMark = w.name === state.active ? "*" : " "
-        lines.push(`${cursor}${activeMark} ${w.name}  (${w.host})`)
+        wsLines.push(`${cursor}${activeMark} ${w.name}`)
+        wsLines.push(`   ${w.host}`)
       })
     }
 
-    lines.push("")
-    lines.push("Catalogs")
-    if (catalogs.length === 0) lines.push("  (none)")
-    else catalogs.slice(0, 20).forEach((c) => lines.push(`  - ${c}`))
+    const catLines = catalogs.length ? catalogs.slice(0, 20).map((c) => `- ${c}`) : ["(none)"]
 
-    lines.push("")
-    lines.push(`Status: ${status || "idle"}`)
+    const left = drawPanel("Workspaces", wsLines, 54)
+    const right = drawPanel("Catalogs", catLines, 54)
+    const rows = combineColumns(left, right)
 
-    screen.content = lines.join("\n")
+    const statusPanel = drawPanel("Status", [status], 110)
+
+    screen.content = [...header, ...rows, "", ...statusPanel].join("\n")
   }
 
   await refreshCatalogs()
   redraw()
 
   renderer.keyInput.on("keypress", async (key) => {
+    const workspaces = currentWorkspaces()
+
     if (key.name === "q") {
       renderer.stop()
       process.exit(0)
