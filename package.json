@@ -1,10 +1,13 @@
 {
   "name": "databricks-tui",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo \"TODO: wire OpenTUI app\"",
-    "build": "echo \"TODO\""
+    "dev": "bun run src/index.ts",
+    "build": "echo \"TODO: bundle OpenTUI app\""
+  },
+  "dependencies": {
+    "@opentui/core": "latest"
   }
 }

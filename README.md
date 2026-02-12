@@ -1,31 +1,35 @@
 # databricks-tui
 
-Terminal UI for Databricks exploration (catalogs/schemas/tables/query sample), designed to be launched from `databricks-nvim` via `:DbxTui`.
+A general-purpose terminal UI for exploring Databricks resources:
+
+- workspaces/profiles
+- catalogs, schemas, tables
+- table metadata
+- sample/query results
+
+It can be launched directly in any terminal, and can also be embedded by editors/tools.
 
 ## Status
 
-Scaffold phase.
+Early scaffold (OpenTUI migration in progress).
 
-## Planned stack
+## Tech direction
 
 - OpenTUI
 - TypeScript
-- Node runtime
-
-## Integration target
-
-`databricks-nvim` can launch this app in a floating terminal:
-
-```lua
-tui = {
-  cmd = { "databricks-tui" },
-}
-```
+- Bun/Node runtime
 
 ## Roadmap
 
 1. Boot OpenTUI app shell
-2. Add tree pane (catalog/schema/table)
-3. Add details pane
-4. Add sample query pane
-5. Add keyboard navigation and actions
+2. Add explorer tree (catalog → schema → table)
+3. Add details panel
+4. Add sample/query results panel
+5. Add key-driven navigation/actions
+
+## Dev
+
+```bash
+bun install
+bun run dev
+```
