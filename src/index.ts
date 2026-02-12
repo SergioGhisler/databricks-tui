@@ -1,4 +1,11 @@
-import { createCliRenderer, TextRenderable } from "@opentui/core"
+import {
+  BoxRenderable,
+  SelectRenderable,
+  SelectRenderableEvents,
+  TextRenderable,
+  createCliRenderer,
+  type SelectOption,
+} from "@opentui/core"
 import readline from "node:readline/promises"
 import { stdin as input, stdout as output } from "node:process"
 import { addProfile, getActiveProfile, loadState, removeProfile, setActive } from "./profiles"
@@ -66,154 +73,165 @@ async function cliMode(args: string[]) {
   return false
 }
 
-function drawPanel(title: string, bodyLines: string[], width = 58): string[] {
-  const top = `┌─ ${title} ${"─".repeat(Math.max(1, width - title.length - 4))}┐`
-  const bottom = `└${"─".repeat(width)}┘`
-  const rows = bodyLines.map((l) => `│ ${l.slice(0, width - 1).padEnd(width - 1, " ")}│`)
-  return [top, ...rows, bottom]
-}
-
-function combineColumns(left: string[], right: string[], gap = "  "): string[] {
-  const max = Math.max(left.length, right.length)
-  const lw = Math.max(...left.map((x) => x.length), 0)
-  const out: string[] = []
-  for (let i = 0; i < max; i++) {
-    const l = left[i] ?? ""
-    const r = right[i] ?? ""
-    out.push(l.padEnd(lw, " ") + gap + r)
-  }
-  return out
-}
-
 async function runTui() {
-  const renderer = await createCliRenderer({ exitOnCtrlC: true })
-  const state = await loadState()
-
-  let selected = 0
-  const active = getActiveProfile(state)
-  if (active?.name) {
-    const idx = state.profiles.findIndex((w) => w.name === active.name)
-    if (idx >= 0) selected = idx
-  }
-
-  let catalogs: string[] = []
-  let status = "ready"
-
-  const screen = new TextRenderable(renderer, {
-    id: "screen",
-    content: "loading...",
-    left: 1,
-    top: 1,
+  const renderer = await createCliRenderer({
+    exitOnCtrlC: true,
+    autoFocus: true,
   })
-  renderer.root.add(screen)
 
-  function currentWorkspaces() {
-    return state.profiles
+  let state = await loadState()
+  let activeName = getActiveProfile(state)?.name
+
+  const header = new TextRenderable(renderer, {
+    id: "header",
+    content: "databricks-tui   [Tab] switch pane   [Enter] select/use   [r] refresh   [x] delete workspace   [q] quit",
+    left: 2,
+    top: 1,
+    fg: "#93c5fd",
+  })
+
+  const wsBox = new BoxRenderable(renderer, {
+    id: "ws-box",
+    left: 2,
+    top: 3,
+    width: 58,
+    height: 26,
+    borderStyle: "rounded",
+    title: "Workspaces",
+  })
+
+  const catBox = new BoxRenderable(renderer, {
+    id: "cat-box",
+    left: 62,
+    top: 3,
+    width: 58,
+    height: 26,
+    borderStyle: "rounded",
+    title: "Catalogs",
+  })
+
+  const status = new TextRenderable(renderer, {
+    id: "status",
+    left: 2,
+    top: 30,
+    content: "Status: ready",
+    fg: "#a3a3a3",
+  })
+
+  const workspaceSelect = new SelectRenderable(renderer, {
+    id: "workspace-select",
+    left: 4,
+    top: 5,
+    width: 54,
+    height: 22,
+    options: [],
+  })
+
+  const catalogSelect = new SelectRenderable(renderer, {
+    id: "catalog-select",
+    left: 64,
+    top: 5,
+    width: 54,
+    height: 22,
+    options: [],
+  })
+
+  renderer.root.add(header)
+  renderer.root.add(wsBox)
+  renderer.root.add(catBox)
+  renderer.root.add(status)
+  renderer.root.add(workspaceSelect)
+  renderer.root.add(catalogSelect)
+
+  let focusedPane: "workspaces" | "catalogs" = "workspaces"
+
+  function workspaceOptions(): SelectOption[] {
+    if (state.profiles.length === 0) {
+      return [{ name: "(no workspaces)", description: "Run: databricks-tui login" }]
+    }
+
+    return state.profiles.map((p) => ({
+      name: p.name,
+      description: `${p.host}${p.name === activeName ? "  [active]" : ""}`,
+    }))
   }
 
-  async function refreshCatalogs() {
-    const ws = currentWorkspaces()[selected]
+  async function refreshCatalogsFor(name?: string) {
+    const ws = state.profiles.find((p) => p.name === (name || activeName))
     if (!ws) {
-      catalogs = []
-      status = "No workspaces. Run: databricks-tui login"
+      catalogSelect.options = [{ name: "(none)", description: "No active workspace" }]
+      status.content = "Status: no active workspace"
       return
     }
+
+    status.content = `Status: loading catalogs for ${ws.name}...`
     try {
-      status = `Loading catalogs for ${ws.name}...`
-      redraw()
-      catalogs = await listCatalogs(ws)
-      status = `Loaded ${catalogs.length} catalogs for ${ws.name}`
+      const cats = await listCatalogs(ws)
+      catalogSelect.options = (cats.length ? cats : ["(none)"]).map((c) => ({
+        name: c,
+        description: "catalog",
+      }))
+      status.content = `Status: loaded ${cats.length} catalogs for ${ws.name}`
     } catch (err) {
-      status = `Error loading catalogs: ${String(err)}`
-      catalogs = []
+      catalogSelect.options = [{ name: "(error)", description: String(err) }]
+      status.content = `Status: error loading catalogs (${String(err)})`
     }
   }
 
-  function redraw() {
-    const header = [
-      "databricks-tui  (OpenTUI in progress)",
-      "keys: ↑/↓ move  Enter use  x delete  r refresh  q quit",
-      "commands: databricks-tui login | use <name> | delete <name>",
-      "",
-    ]
-
-    const wsLines: string[] = []
-    const workspaces = currentWorkspaces()
-    if (workspaces.length === 0) {
-      wsLines.push("(none)")
-    } else {
-      workspaces.forEach((w, i) => {
-        const cursor = i === selected ? ">" : " "
-        const activeMark = w.name === state.active ? "*" : " "
-        wsLines.push(`${cursor}${activeMark} ${w.name}`)
-        wsLines.push(`   ${w.host}`)
-      })
-    }
-
-    const catLines = catalogs.length ? catalogs.slice(0, 20).map((c) => `- ${c}`) : ["(none)"]
-
-    const left = drawPanel("Workspaces", wsLines, 54)
-    const right = drawPanel("Catalogs", catLines, 54)
-    const rows = combineColumns(left, right)
-
-    const statusPanel = drawPanel("Status", [status], 110)
-
-    screen.content = [...header, ...rows, "", ...statusPanel].join("\n")
+  async function refreshAll() {
+    state = await loadState()
+    activeName = getActiveProfile(state)?.name
+    workspaceSelect.options = workspaceOptions()
+    await refreshCatalogsFor(activeName)
   }
 
-  await refreshCatalogs()
-  redraw()
+  workspaceSelect.on(SelectRenderableEvents.ITEM_SELECTED, async (_idx: number, option: SelectOption) => {
+    const name = option?.name
+    if (!name || name.startsWith("(")) return
+    await setActive(name)
+    state = await loadState()
+    activeName = name
+    workspaceSelect.options = workspaceOptions()
+    await refreshCatalogsFor(name)
+  })
 
   renderer.keyInput.on("keypress", async (key) => {
-    const workspaces = currentWorkspaces()
-
     if (key.name === "q") {
       renderer.stop()
       process.exit(0)
     }
 
-    if (key.name === "down" && workspaces.length > 0) {
-      selected = Math.min(workspaces.length - 1, selected + 1)
-      redraw()
+    if (key.name === "tab") {
+      if (focusedPane === "workspaces") {
+        focusedPane = "catalogs"
+        catalogSelect.focus()
+        status.content = "Status: focus catalogs (mouse click also works)"
+      } else {
+        focusedPane = "workspaces"
+        workspaceSelect.focus()
+        status.content = "Status: focus workspaces (mouse click also works)"
+      }
       return
     }
 
-    if (key.name === "up" && workspaces.length > 0) {
-      selected = Math.max(0, selected - 1)
-      redraw()
-      return
-    }
-
-    if (key.name === "return" && workspaces[selected]) {
-      await setActive(workspaces[selected].name)
-      const latest = await loadState()
-      state.active = latest.active
-      status = `Active workspace: ${workspaces[selected].name}`
-      await refreshCatalogs()
-      redraw()
-      return
-    }
-
-    if (key.name === "x" && workspaces[selected]) {
-      const victim = workspaces[selected].name
-      await removeProfile(victim)
-      const latest = await loadState()
-      state.active = latest.active
-      state.profiles = latest.profiles
-      while (selected >= state.profiles.length && selected > 0) selected -= 1
-      status = `Deleted workspace: ${victim}`
-      await refreshCatalogs()
-      redraw()
+    if (key.name === "x" && focusedPane === "workspaces") {
+      // best-effort delete currently selected workspace by matching active
+      if (!activeName) return
+      await removeProfile(activeName)
+      await refreshAll()
+      status.content = `Status: deleted workspace ${activeName}`
       return
     }
 
     if (key.name === "r") {
-      await refreshCatalogs()
-      redraw()
+      await refreshAll()
+      status.content = "Status: refreshed"
       return
     }
   })
 
+  await refreshAll()
+  workspaceSelect.focus()
   renderer.start()
 }
 
